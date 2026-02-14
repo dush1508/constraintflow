@@ -3,7 +3,9 @@ import math
 import operator
 from constraintflow.gbcsr.sparse_tensor import *
 from constraintflow.lib.globals import *
-
+from time import perf_counter
+import constraintflow.lib.globals as Gdog
+print(f"Sanity Check:{Gdog.__file__}")
 input_size = 784
 
 def check_type_equality(x, y):
@@ -85,14 +87,16 @@ def sanityCheck(x, y):
     sanity_time.update_total_time(end_time - start_time)
 
 def unary(x, op):
-    start_time = time.time()
+    start_time = perf_counter()
     if isinstance(x, torch.Tensor):
         res = op(x)
     elif isinstance(x, SparseTensor):
         res = x.unary(op)
     else:
+        # print(f"Unary:{type(x)}")
         res = op(x)
-    unary_time.update_total_time(time.time() - start_time)
+    unary_time.update_total_time(perf_counter() - start_time)
+    unary_time.log_shape_time(perf_counter() - start_time, x)
     return res
 
 def any(x):
@@ -119,7 +123,7 @@ def all(x):
 #     return x.all()
 
 def binary(x, y, op):
-    start_time = time.time()
+    start_time = perf_counter()
     # time.sleep(0.0025)
     sanityCheck(x, y)
     if isinstance(x, SparseTensor):
@@ -128,7 +132,8 @@ def binary(x, y, op):
         res = convert_dense_to_sparse(x, y.total_size).binary(y, op)
     else:
         res = op(x, y)
-    binary_time.update_total_time(time.time() - start_time)
+    binary_time.update_total_time(perf_counter() - start_time)
+    binary_time.log_shape_time(perf_counter()-start_time, tuple((x,y)))
     return res
 
 def cf_max(x, y):
@@ -170,7 +175,7 @@ def const_to_sparse(c, total_size):
     return SparseTensor([], [], total_size.shape[0], total_size, type=type(c), dense_const=c)
 
 def where(x, y, z):
-    start_time = time.time()
+    start_time = perf_counter()
     if isinstance(x, torch.Tensor) and isinstance(y, torch.Tensor) and isinstance(z, torch.Tensor):
         checkShapes(x, y)
         sanityCheck(y, z)
@@ -228,11 +233,12 @@ def where(x, y, z):
     sanityCheck(y1, z1)
 
     res = sp_where(x1, y1, z1)
-    where_time.update_total_time(time.time() - start_time)
+    where_time.update_total_time(perf_counter() - start_time)
+    where_time.log_shape_time(perf_counter()-start_time, tuple((x,y,z)))
     return res
 
 def inner_prod(x, y):
-    t1 = time.time()
+    t1 = perf_counter()
     # time.sleep(0.00625)
     checkTypes(x, y)
     if isinstance(x, SparseTensor):
@@ -313,7 +319,8 @@ def inner_prod(x, y):
             raise Exception('SHAPE MISMATCH')
         res = x@y
 
-    matmul_time.update_total_time(time.time() - t1)
+    matmul_time.update_total_time(perf_counter() - t1)
+    matmul_time.log_shape_time(perf_counter() - t1, tuple((x,y)))
     return res
 
 
@@ -412,18 +419,19 @@ def get_shape_0(x):
     return x.shape[0]
 
 def repeat(mat, repeat_dims):
-    start_time = time.time()
+    start_time = perf_counter()
     if isinstance(mat, float):
         res = mat*torch.ones(*(repeat_dims.tolist()))
     elif isinstance(mat, torch.Tensor):
         res = mat.repeat(*(repeat_dims.tolist()))
     else:
         res = mat.repeat(repeat_dims)
-    repeat_time.update_total_time(time.time() - start_time)
+    repeat_time.update_total_time(perf_counter() - start_time)
+    repeat_time.log_shape_time(perf_counter() - start_time, (mat, repeat_dims))
     return res
 
 def clamp(mat, min_true, const):
-    start_time = time.time()
+    start_time = perf_counter()
     if isinstance(mat, float):
         if min_true:
             if mat>const:
@@ -442,5 +450,6 @@ def clamp(mat, min_true, const):
             res = mat.clamp(max=const)
     else:
         res = mat.clamp(const, min_true)
-    clamp_time.update_total_time(time.time() - start_time)
+    clamp_time.update_total_time(perf_counter() - start_time)
+    clamp_time.log_shape_time(perf_counter() - start_time, (mat, min_true, const))
     return res

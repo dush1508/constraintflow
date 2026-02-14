@@ -1,3 +1,6 @@
+from collections import defaultdict
+import torch
+
 class Flag:
     def __init__(self):
         self.flag = False
@@ -19,11 +22,23 @@ debug_flag2 = Flag()
 debug_flag3 = Flag()
 debug_flag4 = Flag()
 
+class Buffer:
+    def __init__(self):
+        self.buffer_loop1 = 0
+        self.buffer_loop2 = 0
+    
+    def add_to_buffer_loop1(self, time):
+        self.buffer_loop1 += time
+
+    def add_to_buffer_loop2(self, time):
+        self.buffer_loop2 += time
+
 class Time:
     def __init__(self):
         self.total_time = 0
         self.op_time = 0
         self.num_used = 0
+        self.op_shape_times = defaultdict(list)
 
     def __str__(self):
         if self.total_time == 0:
@@ -36,6 +51,26 @@ operation time: {self.op_time: 8.3f}s, \
 index time: {self.total_time - self.op_time: 8.3f}s, \
 num used: {self.num_used}'
     
+    def log_shape_time(self, time, x):
+        self.op_shape_times[self.shape_sig(x)].append(time)
+
+    @staticmethod
+    def shape_sig(x):
+        if isinstance(x, tuple):
+            return ("tuple", tuple(Time.shape_sig(v) for v in x))
+        if (
+            x.__class__.__name__ == "SparseTensor"
+            and hasattr(x, "total_size")
+        ):
+            return ("SparseTensor", tuple(x.total_size.tolist()))
+        if isinstance(x, torch.Tensor):
+            return ("Tensor", tuple(x.shape))
+        if isinstance(x, (bool, int, float)):
+            return (f"scalar: {type(x).__name__}", x)
+        if x in (torch.bool, torch.int, torch.float):
+            return (f"scalar: {str(x).split('.')[-1]}", x)
+
+        return ("unknown", type(x).__name__)
 
     def update_total_time(self, time1):
         self.total_time += time1
@@ -81,3 +116,5 @@ check_time = Time()
 squeeze_time = Time()
 sanity_time = Time()
 sparse_tensor_init_time = Time()
+
+buffer_time = Buffer()

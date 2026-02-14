@@ -1,3 +1,4 @@
+from datetime import time
 import os
 import sys
 import torch
@@ -7,7 +8,10 @@ from torch.utils.data import DataLoader
 
 from constraintflow.compiler.compile import compile as _compile
 from constraintflow.verifier.provesound import provesound as _provesound
-
+from constraintflow.lib.globals import *
+import time
+import constraintflow.lib.globals as Gdog
+print(f"Sanity Check:{Gdog.__file__}")
 app = typer.Typer(help="ConstraintFlow CLI for verification and compilation of DSL programs.")
 
 
@@ -159,7 +163,9 @@ def run(
 
     network_file = get_network(network, network_format, dataset)
     X, y = get_dataset(batch_size, dataset, train=train)
+    typer.echo(f"Clamp time: {clamp_time.total_time}")
 
+    start = time.perf_counter() 
     lb, ub = run(
         network_file,
         batch_size,
@@ -171,11 +177,96 @@ def run(
         print_intermediate_results=print_intermediate_results,
         no_sparsity=no_sparsity,
     )
+    end = time.perf_counter()
+    runtime_total_time = end - start
+    typer.echo(f"Total verification time: {runtime_total_time:.6f}s")
 
     typer.echo(f"Lower bound: {lb}")
     typer.echo(f"Upper bound: {ub}")
     precision = get_precision(lb)
     typer.echo(f"Precision: {precision}")
+
+    
+    import tabulate
+    
+    typer.echo(f"Clamp time: {clamp_time.total_time:.6f}s")
+    clamp_time_table = [(name, f"{sum(times)/len(times):.6f}s", f"{len(times)} calls", f"{sum(times):.6f}s") for name, times in clamp_time.op_shape_times.items()]
+    clamp_time_table.sort(key=lambda x: x[3], reverse=True)
+    typer.echo(tabulate.tabulate(clamp_time_table, headers=["Operation Shape", "Average Time", "Number of Calls", "Total Time"]))
+    sanity_check_total_time = 0
+    for name, times in clamp_time.op_shape_times.items():
+        shape_time_total = sum(times)
+        sanity_check_total_time += shape_time_total
+    typer.echo(f"Clamp Total Time: {sanity_check_total_time:.6f}s")
+
+    typer.echo(f"Binary time: {binary_time.total_time:.6f}s")
+    binary_time_table = [(name, f"{sum(times)/len(times):.6f}s", f"{len(times)} calls", f"{sum(times):.6f}s") for name, times in binary_time.op_shape_times.items()]
+    binary_time_table.sort(key=lambda x: x[3], reverse=True)
+    typer.echo(tabulate.tabulate(binary_time_table, headers=["Operation Shape", "Average Time", "Number of Calls", "Total Time"]))
+    sanity_check_total_time = 0
+    for name, times in binary_time.op_shape_times.items():
+        shape_time_total = sum(times)
+        sanity_check_total_time += shape_time_total
+    typer.echo(f"Binary Total Time: {sanity_check_total_time:.6f}s")
+
+    typer.echo(f"Unary time: {unary_time.total_time:.6f}s")
+    unary_time_table = [(name, f"{sum(times)/len(times):.6f}s", f"{len(times)} calls", f"{sum(times):.6f}s") for name, times in unary_time.op_shape_times.items()]
+    unary_time_table.sort(key=lambda x: x[3], reverse=True)
+    typer.echo(tabulate.tabulate(unary_time_table, headers=["Operation Shape", "Average Time", "Number of Calls", "Total Time"]))
+    sanity_check_total_time = 0
+    for name, times in unary_time.op_shape_times.items():
+        shape_time_total = sum(times)
+        sanity_check_total_time += shape_time_total
+    typer.echo(f"Unary Total Time: {sanity_check_total_time:.6f}s")
+
+    typer.echo(f"Where time: {where_time.total_time:.6f}s")
+    where_time_table = [(name, f"{sum(times)/len(times):.6f}s", f"{len(times)} calls", f"{sum(times):.6f}s") for name, times in where_time.op_shape_times.items()]
+    where_time_table.sort(key=lambda x: x[3], reverse=True)
+    typer.echo(tabulate.tabulate(where_time_table, headers=["Operation Shape", "Average Time", "Number of Calls", "Total Time"]))
+    sanity_check_total_time = 0
+    for name, times in where_time.op_shape_times.items():
+        shape_time_total = sum(times)
+        sanity_check_total_time += shape_time_total
+    typer.echo(f"Where Total Time: {sanity_check_total_time:.6f}s")
+
+
+    typer.echo(f"Repeat time: {repeat_time.total_time:.6f}")
+    repeat_time_table = [(name, f"{sum(times)/len(times):.6f}s", f"{len(times)} calls", f"{sum(times):.6f}s") for name, times in repeat_time.op_shape_times.items()]
+    repeat_time_table.sort(key=lambda x: x[3], reverse=True)
+    typer.echo(tabulate.tabulate(repeat_time_table, headers=["Operation Shape", "Average Time", "Number of Calls", "Total Time"]))
+    sanity_check_total_time = 0
+    for name, times in repeat_time.op_shape_times.items():
+        shape_time_total = sum(times)
+        sanity_check_total_time += shape_time_total
+    typer.echo(f"Repeat Total Time: {sanity_check_total_time:.6f}s")
+    
+    typer.echo(f"Matmul time: {matmul_time.total_time:.6f}s")
+    matmul_time_table = [(name, f"{sum(times)/len(times):.6f}s", f"{len(times)} calls", f"{sum(times):.6f}s") for name, times in matmul_time.op_shape_times.items()]
+    matmul_time_table.sort(key=lambda x: x[3], reverse=True)
+    typer.echo(tabulate.tabulate(matmul_time_table, headers=["Operation Shape", "Average Time", "Number of Calls", "Total Time"]))
+    sanity_check_total_time = 0
+    for name, times in matmul_time.op_shape_times.items():
+        shape_time_total = sum(times)
+        sanity_check_total_time += shape_time_total
+    typer.echo(f"Matmul Total Time: {sanity_check_total_time:.6f}s")
+
+    typer.echo(f"Buffer Loop1 Time: {buffer_time.buffer_loop1:.6f}s")
+    typer.echo(f"Buffer Loop2 Time: {buffer_time.buffer_loop2:.6f}s")
+
+    typer.echo("Percentage of time spent in operations:")
+    typer.echo(f"Total time: {runtime_total_time:.6f}s")
+    if runtime_total_time > 0:
+        typer.echo(f"Clamp: {100 * clamp_time.total_time / runtime_total_time:.2f}%")
+        typer.echo(f"Binary: {100 * binary_time.total_time / runtime_total_time:.2f}%")
+        typer.echo(f"Unary: {100 * unary_time.total_time / runtime_total_time:.2f}%")
+        typer.echo(f"Where: {100 * where_time.total_time / runtime_total_time:.2f}%")
+        typer.echo(f"Repeat: {100 * repeat_time.total_time / runtime_total_time:.2f}%")
+        typer.echo(f"Matmul: {100 * matmul_time.total_time / runtime_total_time:.2f}%")
+        typer.echo(f"Buffer Loop1: {100 * buffer_time.buffer_loop1 / runtime_total_time:.2f}%")
+        typer.echo(f"Buffer Loop2: {100 * buffer_time.buffer_loop2 / runtime_total_time:.2f}%")
+        typer.echo(f"Total_Buffer: {100 * (buffer_time.buffer_loop1 + buffer_time.buffer_loop2) / runtime_total_time:.2f}%")
+
+
 
 
 def main():

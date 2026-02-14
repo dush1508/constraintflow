@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from constraintflow.gbcsr.sparse_block import *
-from constraintflow.lib.globals import *
+import constraintflow.lib.globals as G
 
 from constraintflow.gbcsr.plot import *
 from constraintflow.gbcsr.op_helper import *
@@ -307,7 +307,7 @@ class SparseTensor:
         #             print(start_indices[j], self.end_indices[j])
         #         assert(not(block_overlap([start_indices[i], self.end_indices[i]], [start_indices[j], self.end_indices[j]])))
         
-        sparse_tensor_init_time.update_op_time(time.time()-t1)
+        G.sparse_tensor_init_time.update_op_time(time.time()-t1)
         
         if self.num_blocks > 0:
             if (self.end_indices[0]-self.start_indices[0] == self.total_size).all():
@@ -323,7 +323,7 @@ class SparseTensor:
                     delete_indices.append(i)
         delete_indices.reverse()
 
-        sparse_tensor_init_time.update_total_time(time.time()-t1)
+        G.sparse_tensor_init_time.update_total_time(time.time()-t1)
 
 
         # if self.num_blocks > len(delete_indices):
@@ -443,7 +443,7 @@ Blocks Types: "
         if tensor:
             return res.block
         end_time = time.time()
-        sub_block_custom_range_time.update_total_time(end_time-start_time)
+        G.sub_block_custom_range_time.update_total_time(end_time-start_time)
         return res
     
     def exists_block(self, start_index, end_index):
@@ -498,7 +498,7 @@ Blocks Types: "
                 src_block = self.blocks[i].get_dense()[tuple(get_slice(src_start_indices, src_end_indices))]
                 blocks.append(DenseBlock(src_block))
         end_time = time.time()
-        get_sparse_range_time.update_total_time(end_time-start_time)
+        G.get_sparse_range_time.update_total_time(end_time-start_time)
         return SparseTensor(res_start_indices, blocks, self.dims, self.total_size, res_end_indices, type=self.type, dense_const=self.dense_const)
     
 
@@ -512,7 +512,7 @@ Blocks Types: "
             start_indices.append((self.start_indices[i]-start_index))
             end_indices.append((self.end_indices[i]-start_index))
         end_time = time.time()
-        reduce_size_time.update_total_time(end_time-start_time)
+        G.reduce_size_time.update_total_time(end_time-start_time)
         return SparseTensor(start_indices, self.blocks, self.dims, total_size, end_indices, type=self.type, dense_const=self.dense_const) 
 
     def increase_size(self, start_index, new_total_size):
@@ -660,7 +660,7 @@ Blocks Types: "
                 res_indices += temp_res_indices
 
         end_time = time.time()
-        union_tensors_time.update_total_time(end_time - start_time)
+        G.union_tensors_time.update_total_time(end_time - start_time)
         if indices:
             return res_start_indices, res_end_indices, res_indices
         return res_start_indices, res_end_indices
@@ -985,7 +985,7 @@ Blocks Types: "
             end_indices.append(torch.concat([self.end_indices[i][:index], self.end_indices[i][index+1:]]))
         x = SparseTensor(start_indices, blocks, dims, total_size, end_indices, self.type, self.dense_const)
         end_time = time.time()
-        squeeze_time.update_total_time(end_time - start_time)
+        G.squeeze_time.update_total_time(end_time - start_time)
         return x
     
     def unsqueeze(self, index):
@@ -1001,7 +1001,7 @@ Blocks Types: "
             start_indices.append(torch.concat([self.start_indices[i][:index], torch.tensor([0]), self.start_indices[i][index:]]))
             end_indices.append(torch.concat([self.end_indices[i][:index], torch.tensor([1]), self.end_indices[i][index:]]))
         end_time = time.time()
-        unsqueeze_time.update_total_time(end_time-start_time)
+        G.unsqueeze_time.update_total_time(end_time-start_time)
         return SparseTensor(start_indices, blocks, dims, total_size, end_indices, self.type, self.dense_const)
     
     def repeat(self, repeat_dims):
