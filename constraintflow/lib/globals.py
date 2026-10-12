@@ -30,6 +30,13 @@ debug_flag2 = Flag()
 debug_flag3 = Flag()
 debug_flag4 = Flag()
 
+#FIX FOR: sign-split concretization lost interval width in fp32 on narrow boxes.
+# Concretize (c >= 0 ? c*n[u] : c*n[l]) as c*(u+l)/2 + |c|*(u-l)/2 instead of c+*u + c-*l
+# (rewrite.rewrite_expr_ternary_to_clamp). The sign split subtracts two large near-equal sums
+# when the box is narrow and loses its width in fp32; same rule as constraintflow-gpu.
+center_radius = Flag()
+center_radius.set_flag()
+
 class Time:
     def __init__(self):
         self.total_time = 0

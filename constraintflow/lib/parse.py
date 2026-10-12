@@ -11,6 +11,49 @@ from constraintflow.lib.globals import get_device
 
 from collections import deque
 
+def _shape_value(node, values, layer_shape):
+    """Constant-fold a shape-only node (Constant, Shape, Gather, ... on constants).
+
+    Torch-exported nets build their flatten shape in-graph (Shape -> Gather ->
+    Unsqueeze -> Concat -> Reshape). Left unfolded, those nodes alias the activation
+    and the Concat becomes a bogus layer. Mirrors constraintflow-gpu's parser; returns
+    None for nodes that act on activations. `layer_shape(name)` is the activation's shape.
+    """
+    op = node.op_type
+    attrs = {a.name: onnx.helper.get_attribute_value(a) for a in node.attribute}
+    if op == 'Constant':
+        if 'value' in attrs:
+            return numpy_helper.to_array(attrs['value'])
+        for key in ('value_int', 'value_ints', 'value_float', 'value_floats'):
+            if key in attrs:
+                return np.asarray(attrs[key])
+        raise ValueError(f"Unsupported Constant {node.name!r}")
+    if op == 'Shape':
+        shape = layer_shape(node.input[0])
+        return np.asarray(shape[attrs.get('start', 0):attrs.get('end')], dtype=np.int64)
+    if op not in ('Gather', 'Unsqueeze', 'Squeeze', 'Concat', 'Mul', 'Add', 'Sub', 'Div', 'Cast'):
+        return None
+    if not all(name in values for name in node.input):
+        if op in ('Gather', 'Unsqueeze', 'Squeeze', 'Cast'):
+            raise ValueError(f"Unsupported activation operation {op} {node.name!r}")
+        return None
+    args = [values[name] for name in node.input]
+    if op == 'Gather':
+        return np.take(args[0], args[1], axis=attrs.get('axis', 0))
+    if op in ('Unsqueeze', 'Squeeze'):
+        axes = args[1].tolist() if len(args) > 1 else attrs.get('axes')
+        axes = tuple(axes) if axes is not None else None
+        return np.expand_dims(args[0], axes) if op == 'Unsqueeze' else np.squeeze(args[0], axes)
+    if op == 'Concat':
+        return np.concatenate(args, axis=attrs['axis'])
+    if op == 'Cast':
+        return args[0].astype(onnx.helper.tensor_dtype_to_np_dtype(attrs['to']))
+    if op == 'Div':
+        result = np.divide(*args)
+        return np.trunc(result).astype(args[0].dtype) if np.issubdtype(args[0].dtype, np.integer) else result
+    return {'Mul': np.multiply, 'Add': np.add, 'Sub': np.subtract}[op](*args)
+
+
 def compute_size(shape):
     s = 1
     while len(shape)>0:
@@ -56,6 +99,12 @@ def forward_layers(net, relu_mask, transformers):
     return transformers
 
 
+#FEAT: weight cast for --dtype float64.
+def _default_float(t):
+    """Float weights in the run's dtype (fp32 weights, or exact fp64 copies under --dtype float64)."""
+    return t.to(torch.get_default_dtype()) if t.is_floating_point() else t
+
+
 def parse_onnx_layers(net, spec_weight, spec_bias, no_sparsity):
     input_shape = [dim.dim_value for dim in net.graph.input[0].type.tensor_type.shape.dim]
     input_shape = [1 if i == 0 else i for i in input_shape]
@@ -66,11 +115,13 @@ def parse_onnx_layers(net, spec_weight, spec_bias, no_sparsity):
     layers = Network(input_name=net.graph.input[0].name, input_shape=input_shape, input_size=input_size, input_start=0, input_end=input_size, net_format='onnx', no_sparsity=no_sparsity)
     num_layers = len(net.graph.node)
     layers.num_layers = num_layers
-    model_name_to_val_dict = {init_vals.name: torch.tensor(numpy_helper.to_array(init_vals)).to(get_device()) for init_vals in net.graph.initializer}
+    #FEAT: float weights follow the run dtype.
+    model_name_to_val_dict = {init_vals.name: _default_float(torch.tensor(numpy_helper.to_array(init_vals)).to(get_device())) for init_vals in net.graph.initializer}
 
     layers.size = input_size
     shape = input_shape
 
+    values = {v.name: numpy_helper.to_array(v) for v in net.graph.initializer}
     names_hash = dict()
     index = 0
     names_hash[net.graph.input[0].name] = index
@@ -82,6 +133,10 @@ def parse_onnx_layers(net, spec_weight, spec_bias, no_sparsity):
         node = net.graph.node[cur_layer]
         operation = node.op_type
         nd_inps = node.input
+        value = _shape_value(node, values, lambda name: layers[names_hash[name]].shape)
+        if value is not None:
+            values[node.output[0]] = value
+            continue
         index+=1
 
 
@@ -177,10 +232,17 @@ def parse_onnx_layers(net, spec_weight, spec_bias, no_sparsity):
 
         elif operation == 'MatMul':
             names_hash[str(net.graph.node[cur_layer].output[0])] = index
-            parents[index] = [names_hash[str(net.graph.node[cur_layer].input[1])]]
-            
-            # Making some weird assumption that the weight is always 1th index
-            layer = Layer(weight=model_name_to_val_dict[nd_inps[0]], type=LayerType.Linear, identifier=index, parents=parents[index])
+            # Either operand may be the weight: ERAN nets export W @ x, the torch-exported
+            # ResNets x @ W (W stored [in, out]). Same rule as constraintflow-gpu's parser.
+            constant_inputs = [name in model_name_to_val_dict for name in nd_inps]
+            if sum(constant_inputs) != 1:
+                raise ValueError(f"MatMul {node.name!r} requires exactly one initializer operand")
+            weight_index = constant_inputs.index(True)
+            weight = model_name_to_val_dict[nd_inps[weight_index]]
+            if weight_index == 1:
+                weight = weight.T.contiguous()
+            parents[index] = [names_hash[nd_inps[1 - weight_index]]]
+            layer = Layer(weight=weight, type=LayerType.Linear, identifier=index, parents=parents[index])
             layers.append(layer)
             [w_1, w_2] = layer.weight.shape 
             o_1 = 1 

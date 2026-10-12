@@ -660,10 +660,20 @@ class ConvertToIr(astVisitor.ASTVisitor):
         elif ast_node.op.op_name == 'Affine':
             self.store['curr'] = IrVar('curr', [IrMetadataElement([1, IrAst.curr_size], 'Neuron', [IrAst.batch_size, 1], False)])
             self.store['prev'] = IrVar('prev', [IrMetadataElement([1, 1, IrAst.prev_size], 'Neuron', [IrAst.batch_size, IrAst.curr_size, 1], False)])
+        elif ast_node.op.op_name == 'Neuron_add':
+            # A program-defined rule for the residual Add layer, emitted as transformer.Add;
+            # prev_0/prev_1 are its two parent layers (Flow.flow passes them as prev1/prev2).
+            neuron = lambda name: IrVar(name, [IrMetadataElement([1, IrAst.curr_size], 'Neuron', [IrAst.batch_size, 1], False)])
+            self.store['curr'] = neuron('curr')
+            self.store['prev_0'] = neuron('prev1')
+            self.store['prev_1'] = neuron('prev2')
+            retIr = IrOpStmt('Add', representations.create_cfg(self.visit(ast_node.ret)))
+            self.store = original_store
+            return retIr
         else:
             raise Exception('Not Implemented')
         temp = self.visit(ast_node.ret)
-        
+
         cfg = representations.create_cfg(temp)
         retIr = IrOpStmt(ast_node.op.op_name, cfg)
         self.store = original_store

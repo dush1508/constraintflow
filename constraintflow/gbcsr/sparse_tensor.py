@@ -16,7 +16,8 @@ from constraintflow.gbcsr.op_helper import *
 
 # Map Python built-in types to torch dtypes; avoids float -> float64 (Python
 # float is 64-bit, but we want 32-bit throughout for performance parity).
-_TORCH_DTYPE = {float: torch.float32, bool: torch.bool, int: torch.int32}
+#FEAT: Python float maps to the run dtype (torch.float is fp64 under --dtype float64).
+_TORCH_DTYPE = {float: torch.float, bool: torch.bool, int: torch.int32}
 def _tdtype(t):
     return _TORCH_DTYPE.get(t, t)
 

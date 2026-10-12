@@ -82,7 +82,8 @@ class CodeGen(irVisitor.IRVisitor):
 
             transformerIr = node.tstore[transformer_name]
             for j, opStmtIr in enumerate(transformerIr):
-                self.write('def ' + opStmtIr.op + '(self, abs_elem, prev, curr, poly_size, curr_size, prev_size, input_size, batch_size):')
+                prev = 'prev1, prev2' if opStmtIr.op == 'Add' else 'prev'  # Add has two parent layers
+                self.write('def ' + opStmtIr.op + '(self, abs_elem, ' + prev + ', curr, poly_size, curr_size, prev_size, input_size, batch_size):')
                 self.indent += 1
                 
                 cfg = opStmtIr.cfg
@@ -538,11 +539,32 @@ class CodeGen(irVisitor.IRVisitor):
         self.write('_par_n_orig = torch.get_num_threads()')
         self.write('_par_n_cores = torch.multiprocessing.cpu_count()')
         self.write('torch.set_num_threads(max(1, min(_par_n_orig, _par_n_cores // 2)))')
-        self.write('_t1 = threading.Thread(target=_par_thread_1)')
-        self.write('_t2 = threading.Thread(target=_par_thread_2)')
+        #FIX FOR: an exception in a thread (e.g. CUDA OOM) was only printed; its bound stayed None and the
+        # run later crashed with an unrelated "'NoneType' object has no attribute 'dense_const'".
+        self.write('_par_errors = []')
+        self.write('def _par_guard(f):')
+        self.indent += 1
+        self.write('def _run():')
+        self.indent += 1
+        self.write('try:')
+        self.indent += 1
+        self.write('f()')
+        self.indent -= 1
+        self.write('except BaseException as e:')
+        self.indent += 1
+        self.write('_par_errors.append(e)')
+        self.indent -= 2
+        self.write('return _run')
+        self.indent -= 1
+        self.write('_t1 = threading.Thread(target=_par_guard(_par_thread_1))')
+        self.write('_t2 = threading.Thread(target=_par_guard(_par_thread_2))')
         self.write('_t1.start(); _t2.start()')
         self.write('_t1.join(); _t2.join()')
         self.write('torch.set_num_threads(_par_n_orig)')
+        self.write('if _par_errors:')
+        self.indent += 1
+        self.write('raise _par_errors[0]')
+        self.indent -= 1
 
     def visitIrFlow(self, node):
         self.indent += 1

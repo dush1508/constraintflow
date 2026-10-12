@@ -38,7 +38,10 @@ def binary_to_identity_unary(op):
     elif op == operator.mul:
         return lambda x: x
     elif op == operator.sub:
-        return lambda x: x.unary(operator.neg)
+        #FIX FOR: crash ('float' object has no attribute 'unary') exposed by the center/radius rewrite.
+        # x is a SparseBlock (sparse_tensor.binary) or a raw tensor/float block
+        # (SparseBlock.binary -> unary_operation), which has no .unary.
+        return lambda x: x.unary(operator.neg) if hasattr(x, 'unary') else operator.neg(x)
     elif op == operator.and_:
         return lambda x: x
     elif op == operator.or_:

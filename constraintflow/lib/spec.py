@@ -61,7 +61,8 @@ class ImageDataset:
         I = (~(y.unsqueeze(1) == torch.arange(num_classes).type_as(y).unsqueeze(0)))
         weight = (weight[I].view(X.size(0), num_classes - 1, num_classes))
 
-        bias = torch.zeros(num_classes - 1, dtype=torch.float32, device=X.device)
+        #FEAT: follow the run dtype instead of hardcoded fp32.
+        bias = torch.zeros(num_classes - 1, dtype=torch.float, device=X.device)
         return weight, bias
     
 
@@ -131,7 +132,10 @@ def create_llist(network):
 
 def get_network_and_input_spec(network_file, batch_size, X, y, dataset, eps, train=False, no_sparsity=False):
     if dataset == 'tinyimagenet':
-        X = X.to(torch.float32) / 255.0
+        #FEAT: follow the run dtype instead of hardcoded fp32.
+        X = X.to(torch.float) / 255.0
+    #FEAT: images follow the run dtype (fp64 under --dtype float64).
+    X = X.to(torch.get_default_dtype())
 
     spec_weight, spec_bias = ImageDataset.get_output_spec_weight_and_bias(X, y, dataset)
     network = get_net(network_file, spec_weight, spec_bias, no_sparsity)

@@ -20,7 +20,8 @@ func f(Neuron n1, Neuron n2) = n1[l] >= n2[u];
 func abs(Float x) = x >= 0.0 ? x : -x;
 
 func relu(Float x) = x >= 0.0 ? x : 0.0;
-func relu_n(Neuron n) = n[l] + n[u] >= 0.0 ? n : 0.0;
+//FIX FOR: crownibp.cf differed from constraintflow-gpu's on exact l+u == 0 ties (N21); auto_LiRPA uses >.
+func relu_n(Neuron n) = n[l] + n[u] > 0.0 ? n : 0.0;
 func compute_upper(Neuron n) = n[l] >= 0.0 ? n : (n[u] <= 0.0 ? 0.0 : (((n[u]) / ((n[u]) - (n[l]))) * ((n))) - (((n[u]) * (n[l])) / ((n[u]) - (n[l]))));
 
 func deriv(Float x) = sigma(x) * (1 - sigma(x));
@@ -39,6 +40,9 @@ transformer deeppoly{
     Affine -> curr[last_layer] == 1 ? (backsubs_lower(prev.dot(curr[weight]) + curr[bias], curr), backsubs_upper(prev.dot(curr[weight]) + curr[bias], curr), prev.dot(curr[weight]) + curr[bias], prev.dot(curr[weight]) + curr[bias]) : ((prev.dot(curr[weight]) + curr[bias]).map(simplify_lower), (prev.dot(curr[weight]) + curr[bias]).map(simplify_upper), prev.dot(curr[weight]) + curr[bias], prev.dot(curr[weight]) + curr[bias]);
     
     Relu -> (relu(prev[l]), relu(prev[u]), relu_n(prev), compute_upper(prev));
+
+    //FIX FOR: ResNet crownibp bounds differed from constraintflow-gpu (N36 ~1.3%): its crownibp.cf has this Neuron_add rule, this file fell back to the builtin interval-sum Add.
+    Neuron_add -> ((prev_0 + prev_1).map(simplify_lower), (prev_0 + prev_1).map(simplify_upper), prev_0 + prev_1, prev_0 + prev_1);
 
 }
 

@@ -160,6 +160,10 @@ class ASTTC(astVisitor.ASTVisitor):
 		if(op == "+" or op == "-"):
 			# if((self.isSubType(ltype, "SymExp") and self.isSubType(rtype, "PolyExp")) or (self.isSubType(rtype, "SymExp") and self.isSubType(ltype, "PolyExp"))):
 			# 	return 'PolyExp'
+			# A sum of two (different) neurons, e.g. Neuron_add's prev_0 + prev_1, is a
+			# linear expression, not a neuron.
+			if(ltype == "Neuron" and rtype == "Neuron"):
+				return 'PolyExp'
 			if(ltype in accepted and rtype in accepted):
 				if(self.lub_type(ltype, rtype) != "Top"):
 					return self.lub_type(ltype, rtype)
