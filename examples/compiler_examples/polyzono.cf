@@ -43,6 +43,17 @@ transformer deeppoly{
         compute_upper(prev), 
         (prev[l] >= 0.0 ? prev[Z] : (prev[u] <= 0.0 ? 0.0 : x(prev[l], prev[u], prev[Z])))
     );
+
+    //FIX FOR: residual Adds fell back to the builtin Add, which sums the parents' intervals and so loses the
+    // zonotope and DeepPoly correlations between the skip and conv branches (sound but loose on ResNets).
+    // Like Affine: the tighter of the zonotope bound and the DeepPoly backsubstitution of the summed expression.
+    Neuron_add -> (
+        max((prev_0[Z] + prev_1[Z]).map(deepz_lower), backsubs_lower(prev_0 + prev_1, curr)),
+        min((prev_0[Z] + prev_1[Z]).map(deepz_upper), backsubs_upper(prev_0 + prev_1, curr)),
+        prev_0 + prev_1,
+        prev_0 + prev_1,
+        prev_0[Z] + prev_1[Z]
+    );
 }
 
 flow(forward, priority, stop, deeppoly);
