@@ -719,8 +719,17 @@ class DiagonalBlock(SparseBlock):
             a = self.block.unsqueeze(self.diag_index)
             b = sp_block.block
             res = DenseBlock(a * b)
+        #FIX FOR: Diagonal @ Diagonal raised NotImplementedError (hit by polyzono's Neuron_add backsubstitution).
+        elif (isinstance(sp_block, DiagonalBlock)
+              and self.diag_index == sp_block.diag_index == len(self.total_shape) - 1
+              and len(self.total_shape) == len(sp_block.total_shape)
+              and torch.equal(self.total_shape, sp_block.total_shape)):
+            # Both are diagonal on the last two (matrix) axes with identical shapes:
+            # diag(d1) @ diag(d2) = diag(d1 * d2), one multiply of the stored diagonals.
+            res = DiagonalBlock(self.block * sp_block.block, self.total_shape.clone(), self.diag_index)
         elif isinstance(sp_block, DiagonalBlock):
-            raise NotImplementedError
+            # Any other layout: densify both and use the dense matmul, which makes no layout assumption.
+            res = DenseBlock(self.get_dense()).matmul_equal_dims(DenseBlock(sp_block.get_dense()))
         elif isinstance(sp_block, KernelBlock):
             block_2 = sp_block.convert_to_patches().block # batch_size, curr_size, num_channels * kx * ky
             block_1 = self.block.unsqueeze(self.diag_index)
