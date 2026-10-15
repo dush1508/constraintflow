@@ -730,6 +730,24 @@ class DiagonalBlock(SparseBlock):
         elif isinstance(sp_block, DiagonalBlock):
             # Any other layout: densify both and use the dense matmul, which makes no layout assumption.
             res = DenseBlock(self.get_dense()).matmul_equal_dims(DenseBlock(sp_block.get_dense()))
+        #FIX FOR: Diagonal @ Patches raised "Unrecognized sparse block type" (hit by deeppoly_efficient's
+        # Neuron_add backsubstitution, whose Relu L/U are the pre-activation conv's own patches).
+        elif isinstance(sp_block, PatchesBlock):
+            batches = (int(self.total_shape[0]), int(sp_block.total_shape[0]))
+            if (len(self.total_shape) == len(sp_block.total_shape) == 3
+                    and self.diag_index == 2
+                    and int(self.total_shape[1]) == int(sp_block.total_shape[1]) == sp_block.block.shape[1]
+                    and (batches[0] == batches[1] or 1 in batches)):
+                # diag(d) @ P scales row i of P by d[i]: the KernelBlock case below without the conversion.
+                total_shape = sp_block.total_shape.clone()
+                total_shape[0] = max(batches)
+                res = PatchesBlock(self.block.unsqueeze(self.diag_index) * sp_block.block, total_shape,
+                                   sp_block.ix, sp_block.iy, sp_block.ox, sp_block.oy, sp_block.sx, sp_block.sy,
+                                   sp_block.px, sp_block.py, sp_block.kx, sp_block.ky,
+                                   sp_block.num_channels, sp_block.num_kernels)
+            else:
+                # Any other layout: densify both and use the dense matmul.
+                res = DenseBlock(self.get_dense()).matmul_equal_dims(DenseBlock(sp_block.get_dense()))
         elif isinstance(sp_block, KernelBlock):
             block_2 = sp_block.convert_to_patches().block # batch_size, curr_size, num_channels * kx * ky
             block_1 = self.block.unsqueeze(self.diag_index)
