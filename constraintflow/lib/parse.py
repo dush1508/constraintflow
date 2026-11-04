@@ -7,6 +7,8 @@ import copy
 
 from onnx import numpy_helper
 from constraintflow.lib.network import Layer, LayerType, Network
+#FEAT: inference BatchNormalization is folded into its Conv at load time.
+from constraintflow.lib.onnx_preprocess import expand_maxpool, fold_batch_norm
 from constraintflow.lib.globals import get_device
 
 from collections import deque
@@ -113,10 +115,14 @@ def parse_onnx_layers(net, spec_weight, spec_bias, no_sparsity):
     input_size = compute_size(input_shape)
     # Create the new Network object
     layers = Network(input_name=net.graph.input[0].name, input_shape=input_shape, input_size=input_size, input_start=0, input_end=input_size, net_format='onnx', no_sparsity=no_sparsity)
-    num_layers = len(net.graph.node)
-    layers.num_layers = num_layers
     #FEAT: float weights follow the run dtype.
     model_name_to_val_dict = {init_vals.name: _default_float(torch.tensor(numpy_helper.to_array(init_vals)).to(get_device())) for init_vals in net.graph.initializer}
+    #FEAT: fold BN before the layer walk (the identity fallback below used to drop it silently).
+    net, model_name_to_val_dict = fold_batch_norm(net, model_name_to_val_dict)
+    #FEAT: 2x2/stride-2 MaxPool as Conv/Relu/Add, Dropout as Identity (VNN-COMP vggnet16).
+    net, model_name_to_val_dict = expand_maxpool(net, model_name_to_val_dict)
+    num_layers = len(net.graph.node)
+    layers.num_layers = num_layers
 
     layers.size = input_size
     shape = input_shape
@@ -205,11 +211,13 @@ def parse_onnx_layers(net, spec_weight, spec_bias, no_sparsity):
             layers.append(layer)
             layer.shape = layers[parents[index][0]].shape
 
-        elif operation == 'Sigmoid':
+        #FEAT: Tanh, as Sigmoid (ERAN tanh networks).
+        elif operation in ('Sigmoid', 'Tanh'):
             names_hash[str(net.graph.node[cur_layer].output[0])] = index
             parents[index] = [names_hash[str(net.graph.node[cur_layer].input[0])]]
             
-            layer = Layer(type=LayerType.Sigmoid, identifier=index, parents=parents[index])
+            layer = Layer(type=LayerType.Sigmoid if operation == 'Sigmoid' else LayerType.Tanh,
+                          identifier=index, parents=parents[index])
             layers.append(layer)
             layer.shape = layers[parents[index][0]].shape
 

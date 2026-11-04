@@ -1,3 +1,4 @@
+import functools
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 
@@ -7,6 +8,18 @@ from constraintflow.lib.parse import *
 from constraintflow.gbcsr.sparse_tensor import *
 
 
+#FEAT: 'vnnlib:<npz>' datasets: VNN-COMP specs (input box lo/hi, margin rows C y + d > 0), stacked by the harness.
+@functools.lru_cache(maxsize=None)
+def load_vnnlib_specs(path):
+    import numpy as np
+    with np.load(path) as f:
+        return {k: torch.from_numpy(f[k]) for k in ('lo', 'hi', 'C', 'd', 'x_shape')}
+
+
+def vnnlib_path(dataset):
+    return dataset[len('vnnlib:'):] if dataset.startswith('vnnlib:') else None
+
+
 class ImageDataset:
     # mnist_mean = torch.tensor([0.0]).reshape(-1, 1)
     # mnist_std = torch.tensor([1.0]).reshape(-1, 1)
@@ -14,28 +27,49 @@ class ImageDataset:
     mnist_std = torch.tensor([0.3081]).reshape(-1, 1)
     cifar10_mean = torch.tensor([0.4914, 0.4822, 0.4465]).reshape(1, -1, 1, 1)
     cifar10_std = torch.tensor([0.2023, 0.1994, 0.2010]).reshape(1, -1, 1, 1)
+    #FEAT: CIFAR-100 (CIFAR100_TinyImageNet_ResNet benchmark's normalizer).
+    cifar100_mean = torch.tensor([0.5071, 0.4865, 0.4409]).reshape(1, -1, 1, 1)
+    cifar100_std = torch.tensor([0.2673, 0.2564, 0.2761]).reshape(1, -1, 1, 1)
+    tinyimagenet_mean = torch.tensor([0.4802, 0.4481, 0.3975]).reshape(1, -1, 1, 1)
+    tinyimagenet_std = torch.tensor([0.2302, 0.2265, 0.2262]).reshape(1, -1, 1, 1)
     
     def __init__(self):
         pass
 
+    def _stats(dataset):
+        if dataset == 'tinyimagenet':
+            return ImageDataset.tinyimagenet_mean, ImageDataset.tinyimagenet_std
+        if dataset == 'cifar100':
+            return ImageDataset.cifar100_mean, ImageDataset.cifar100_std
+        return ImageDataset.cifar10_mean, ImageDataset.cifar10_std
+
     def create_l(image, network_size, batch_size, eps = 0.01, dataset = 'mnist', no_sparsity=False):
+        #FEAT: a vnnlib image is its box itself: [batch, 2 (lo, hi), ...], no clipping or normalization.
+        if vnnlib_path(dataset):
+            return create_sparse_init(image[:, 0].reshape(batch_size, -1), float('-inf'), batch_size, network_size, no_sparsity)
         l = torch.clip(image - eps, min=0., max=1.)
         if dataset == 'mnist':
             l = (l - ImageDataset.mnist_mean.to(l.device)) / ImageDataset.mnist_std.to(l.device)
         else:
-            mean = ImageDataset.cifar10_mean.to(l.device).expand(l.shape)
-            std = ImageDataset.cifar10_std.to(l.device).expand(l.shape)
+            #FIX FOR: TinyImageNet was normalized with the CIFAR-10 mean/std.
+            mean, std = ImageDataset._stats(dataset)
+            mean = mean.to(l.device).expand(l.shape)
+            std = std.to(l.device).expand(l.shape)
             l = (l - mean) / std
         l = l.reshape(batch_size,-1)
         l = create_sparse_init(l, float('-inf'), batch_size, network_size, no_sparsity)
         return l
 
     def create_u(image, network_size, batch_size, eps = 0.01, dataset = 'mnist', no_sparsity=False):
+        if vnnlib_path(dataset):
+            return create_sparse_init(image[:, 1].reshape(batch_size, -1), float('inf'), batch_size, network_size, no_sparsity)
         u = torch.clip(image + eps, min=0., max=1.)
         if dataset == 'mnist':
             u = (u - ImageDataset.mnist_mean.to(u.device)) / ImageDataset.mnist_std.to(u.device)
         else:
-            u = (u - ImageDataset.cifar10_mean.to(u.device)) / ImageDataset.cifar10_std.to(u.device)
+            #FIX FOR: TinyImageNet was normalized with the CIFAR-10 mean/std.
+            mean, std = ImageDataset._stats(dataset)
+            u = (u - mean.to(u.device)) / std.to(u.device)
         u = u.reshape(batch_size, -1)
         u = create_sparse_init(u, float('inf'), batch_size, network_size, no_sparsity)
         return u
@@ -52,8 +86,18 @@ class ImageDataset:
         return image, true_label
     
     def get_output_spec_weight_and_bias(X, y, dataset='mnist'):
+        #FEAT: vnnlib specs: y indexes the spec file; its margin rows C y + d > 0 (one batch shares d).
+        path = vnnlib_path(dataset)
+        if path:
+            specs = load_vnnlib_specs(path)
+            y = y.to(device='cpu', dtype=torch.long)
+            d = specs['d'][y]
+            assert (d == d[0]).all(), 'specs in one batch must share their offsets d'
+            return specs['C'][y].to(device=X.device, dtype=X.dtype), d[0].to(device=X.device, dtype=X.dtype)
         if dataset in ['mnist', 'cifar10', 'cifar']:
             num_classes = 10
+        elif dataset == 'cifar100':
+            num_classes = 100
         elif dataset in ['tinyimagenet', 'imagenet']:
             num_classes = 200
         weight = (torch.eye(num_classes).type_as(X)[y].unsqueeze(1)
@@ -131,9 +175,7 @@ def create_llist(network):
 
 
 def get_network_and_input_spec(network_file, batch_size, X, y, dataset, eps, train=False, no_sparsity=False):
-    if dataset == 'tinyimagenet':
-        #FEAT: follow the run dtype instead of hardcoded fp32.
-        X = X.to(torch.float) / 255.0
+    #FIX FOR: TinyImageNet pixels were divided by 255 a second time (ToTensor already gives [0, 1]).
     #FEAT: images follow the run dtype (fp64 under --dtype float64).
     X = X.to(torch.get_default_dtype())
 

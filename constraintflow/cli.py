@@ -1,4 +1,5 @@
 import gc
+import faulthandler
 import os
 import sys
 
@@ -47,48 +48,31 @@ def get_network(network: str, network_format: str, dataset: str) -> str:
 
 
 def get_dataset(batch_size: int, dataset: str, train: bool = False):
+    #FEAT: vnnlib specs: image i is spec i mod #specs as [lo, hi]; its label is that spec's index.
+    from constraintflow.lib.spec import load_vnnlib_specs, vnnlib_path
+    if vnnlib_path(dataset):
+        specs = load_vnnlib_specs(vnnlib_path(dataset))
+        idx = torch.arange(batch_size) % specs['lo'].shape[0]
+        image = torch.stack([specs['lo'][idx], specs['hi'][idx]], 1)
+        return image.reshape(batch_size, 2, *specs['x_shape'].tolist()), idx
     if dataset == "mnist":
         transform = transforms.ToTensor()  # keep 28x28
         data = datasets.MNIST(root=".", train=train, download=True, transform=transform)
     elif dataset == "cifar10" or dataset == "cifar":
         transform = transforms.ToTensor()  # keep 32x32
         data = datasets.CIFAR10(root=".", train=train, download=True, transform=transform)
+    #FEAT: CIFAR-100 test set (CIFAR100_TinyImageNet_ResNet benchmark).
+    elif dataset == "cifar100":
+        data = datasets.CIFAR100(root=".", train=train, download=True, transform=transforms.ToTensor())
     elif dataset == "tinyimagenet":
-        train = True
-        transform = transforms.Compose([
-            transforms.Resize((64, 64)),  # TinyImageNet images are 64x64
-            transforms.ToTensor(),
-        ])
-        root_dir = "tinyimagenet/tiny-imagenet-200"
-        split = "train" if train else "test"
-        data_dir = os.path.join(root_dir, split)
-        if train:
-            data = datasets.ImageFolder(root=data_dir, transform=transform)
-        else:
-            # TinyImageNet test: all images in one folder
-            from torchvision.datasets.folder import default_loader
-            class TinyImageNetTest(torch.utils.data.Dataset):
-                def __init__(self, root, transform=None):
-                    self.root = root
-                    self.transform = transform
-                    self.loader = default_loader
-                    self.images = sorted(os.listdir(root))
-                def __len__(self):
-                    return len(self.images)
-                def __getitem__(self, idx):
-                    path = os.path.join(self.root, self.images[idx])
-                    img = self.loader(path)
-                    if self.transform:
-                        img = self.transform(img)
-                    return img, -1
-            data = TinyImageNetTest(data_dir, transform=transform)
+        #FIX FOR: TinyImageNet came from the unlabeled-order train split with a top-left crop; the benchmark verifies the labeled val split, center-cropped.
+        from constraintflow.lib.tinyimagenet import TinyImageNetValidation
+        data = TinyImageNetValidation(os.environ.get("CF_TINYIMAGENET_ROOT", "tinyimagenet/tiny-imagenet-200"))
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
 
     dataloader = DataLoader(data, batch_size=batch_size, shuffle=False)
     image, label = next(iter(dataloader))
-    if dataset == 'tinyimagenet':
-        image = image[:, :, :56, :56]  # ensure 3 channels
     # ensure labels are a tensor
     if not isinstance(label, torch.Tensor):
         label = torch.tensor(label)
@@ -177,6 +161,10 @@ def run(
     dtype: str = typer.Option("float32", "--dtype", help="float32, or float64 to compute every float tensor in fp64 (a precision oracle for bound mismatches). Read from argv before the imports; listed here so typer accepts it."),
     #FEAT: --profile-comm records CPU-GPU communication per timed batch (lib/comm_profile.py).
     profile_comm: bool = typer.Option(False, "--profile-comm", help="With --num-images: profile each timed batch with torch.profiler and add syncs, alloc_syncs, gpu_idle_pct and sync_calls to its results line; its time goes to profiled_time_s instead of time_s. Warmups are not profiled."),
+    #FEAT: per-batch time limit.
+    batch_timeout: float = typer.Option(0.0, "--batch-timeout", min=0, help="With --num-images: end the process if one timed batch runs longer than this many seconds (faulthandler prints 'Timeout' and every thread's stack). Warmups: --warmup-timeout. 0: no limit."),
+    #FEAT: per-warmup time limit.
+    warmup_timeout: float = typer.Option(0.0, "--warmup-timeout", min=0, help="With --num-images: end the process if one warmup run takes longer than this many seconds (faulthandler prints 'Timeout' and every thread's stack). 0: no limit."),
 ):
     """
     Run a compiled ConstraintFlow program.
@@ -216,7 +204,7 @@ def run(
 
     if num_images:
         _run_image_batches(_call, batch_size, num_images, warmup, results_file, is_cuda,
-                           print_intermediate_results, profile_comm)
+                           print_intermediate_results, profile_comm, batch_timeout, warmup_timeout)
         return
 
     for i in range(warmup):
@@ -264,7 +252,7 @@ def run(
 
 
 def _run_image_batches(_call, batch_size, num_images, warmup, results_file, is_cuda,
-                       print_intermediate_results, profile_comm=False):
+                       print_intermediate_results, profile_comm=False, batch_timeout=0.0, warmup_timeout=0.0):
     """The --num-images protocol: warmups on the images after the evaluated ones, then one
     timed run per batch. The timed region is the --repeat protocol's (host-to-device copy,
     bounds, sync); the results line is written after the timer stops. No error handling:
@@ -281,14 +269,18 @@ def _run_image_batches(_call, batch_size, num_images, warmup, results_file, is_c
     with open(results_file, "w") as out:
         for j in range(warmup):
             lo = num_images + j * batch_size
+            if warmup_timeout:
+                faulthandler.dump_traceback_later(warmup_timeout, exit=True)
             t0 = time.perf_counter()
             _call(lo, lo + batch_size, False)
             if is_cuda:
                 torch.cuda.synchronize()
             warmup_time = time.perf_counter() - t0
+            faulthandler.cancel_dump_traceback_later()
             typer.echo(f"Warmup run {j + 1}/{warmup}: {warmup_time:.6f} s")
             write(out, {"kind": "warmup", "index": j, "images": [lo, lo + batch_size],
                         "time_s": warmup_time})
+            gc.collect()  # as the other tools: collect between runs, outside the timer
 
         # Freeze the startup heap so automatic collections during timed runs only scan per-run garbage.
         gc.collect()
@@ -306,12 +298,15 @@ def _run_image_batches(_call, batch_size, num_images, warmup, results_file, is_c
                     torch.cuda.synchronize()
                     torch.cuda.reset_peak_memory_stats()
                     resident = torch.cuda.memory_allocated()
+                if batch_timeout:
+                    faulthandler.dump_traceback_later(batch_timeout, exit=True)
                 t0 = time.perf_counter()
                 with comm.region():
                     lb, ub = _call(lo, lo + batch_size, print_intermediate_results)
                     if is_cuda:
                         torch.cuda.synchronize()
                 run_time = time.perf_counter() - t0
+                faulthandler.cancel_dump_traceback_later()
             # Per-run peaks exist only on the GPU; a CPU process's peak RSS is lifetime-wide.
             peak = torch.cuda.max_memory_allocated() if is_cuda else None
             write(out, {"kind": "batch", "batch": i, "images": [lo, lo + batch_size],
@@ -322,6 +317,8 @@ def _run_image_batches(_call, batch_size, num_images, warmup, results_file, is_c
             typer.echo(f"Run {i + 1}/{n_batches}: {run_time:.6f} s, Peak memory: {peak} bytes, "
                        f"Resident memory: {resident} bytes")
             typer.echo(f"=== batch {i} end ===")
+            del lb, ub
+            gc.collect()
 
 
 def main():

@@ -43,6 +43,12 @@ class Flow:
                 curr = Llist(self.model, [1], None, None, [tmp])
                 abs_shape = self.transformer.Sigmoid(self.abs_elem, prev, curr, poly_size, curr_size, prev_size, self.input_size, self.batch_size)
 
+            #FEAT: Tanh layers dispatch like Sigmoid.
+            elif layer.type == LayerType.Tanh:
+                prev = Llist(self.model, [1], None, None, layer.parents)
+                curr = Llist(self.model, [1], None, None, [tmp])
+                abs_shape = self.transformer.Tanh(self.abs_elem, prev, curr, poly_size, curr_size, prev_size, self.input_size, self.batch_size)
+
             elif layer.type == LayerType.Linear:
                 prev = Llist(self.model, [1, 1], None, None, layer.parents)
                 curr = Llist(self.model, [1], None, None, [tmp])
