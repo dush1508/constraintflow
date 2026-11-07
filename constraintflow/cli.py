@@ -48,13 +48,13 @@ def get_network(network: str, network_format: str, dataset: str) -> str:
 
 
 def get_dataset(batch_size: int, dataset: str, train: bool = False):
-    #FEAT: vnnlib specs: image i is spec i mod #specs as [lo, hi]; its label is that spec's index.
-    from constraintflow.lib.spec import load_vnnlib_specs, vnnlib_path
+    #FEAT: vnnlib specs: image i is spec i mod #specs; its label is that spec's index. The image is a placeholder
+    # [lo, hi] box: each run parses its specs (lib/spec.py read_vnnlib_batch).
+    from constraintflow.lib.spec import vnnlib_specs, vnnlib_path
     if vnnlib_path(dataset):
-        specs = load_vnnlib_specs(vnnlib_path(dataset))
-        idx = torch.arange(batch_size) % specs['lo'].shape[0]
-        image = torch.stack([specs['lo'][idx], specs['hi'][idx]], 1)
-        return image.reshape(batch_size, 2, *specs['x_shape'].tolist()), idx
+        specs = vnnlib_specs()
+        idx = torch.arange(batch_size) % len(specs.spec_files(vnnlib_path(dataset)))
+        return torch.zeros(batch_size, 2, *specs.input_shape(vnnlib_path(dataset))), idx
     if dataset == "mnist":
         transform = transforms.ToTensor()  # keep 28x28
         data = datasets.MNIST(root=".", train=train, download=True, transform=transform)

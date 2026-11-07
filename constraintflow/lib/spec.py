@@ -8,12 +8,24 @@ from constraintflow.lib.parse import *
 from constraintflow.gbcsr.sparse_tensor import *
 
 
-#FEAT: 'vnnlib:<npz>' datasets: VNN-COMP specs (input box lo/hi, margin rows C y + d > 0), stacked by the harness.
-@functools.lru_cache(maxsize=None)
-def load_vnnlib_specs(path):
+#FEAT: 'vnnlib:<benchmark folder>' datasets: VNN-COMP specs, each batch's parsed inside the timed run.
+def vnnlib_specs():
+    """bench/vnnlib_specs.py of the harness repo this checkout sits in (spec list, input shape, parser)."""
+    import os, sys
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    if repo not in sys.path:
+        sys.path.append(repo)  # appended: the repo root holds constraintflow/, auto_LiRPA/ checkouts
+    from bench import vnnlib_specs
+    return vnnlib_specs
+
+
+def read_vnnlib_batch(folder, y, X):
+    """Specs y parsed now: their box [batch, 2 (lo, hi), ...] shaped like X, and margin rows C y + d > 0 (one batch shares d)."""
     import numpy as np
-    with np.load(path) as f:
-        return {k: torch.from_numpy(f[k]) for k in ('lo', 'hi', 'C', 'd', 'x_shape')}
+    lo, hi, C, d = vnnlib_specs().read_batch(folder, y.tolist())
+    assert (d == d[0]).all(), 'specs in one batch must share their offsets d'
+    as_x = lambda a: torch.from_numpy(a).to(device=X.device, dtype=X.dtype)
+    return as_x(np.stack([lo, hi], 1)).reshape(X.shape), as_x(C), as_x(d[0])
 
 
 def vnnlib_path(dataset):
@@ -89,11 +101,7 @@ class ImageDataset:
         #FEAT: vnnlib specs: y indexes the spec file; its margin rows C y + d > 0 (one batch shares d).
         path = vnnlib_path(dataset)
         if path:
-            specs = load_vnnlib_specs(path)
-            y = y.to(device='cpu', dtype=torch.long)
-            d = specs['d'][y]
-            assert (d == d[0]).all(), 'specs in one batch must share their offsets d'
-            return specs['C'][y].to(device=X.device, dtype=X.dtype), d[0].to(device=X.device, dtype=X.dtype)
+            return read_vnnlib_batch(path, y, X)[1:]
         if dataset in ['mnist', 'cifar10', 'cifar']:
             num_classes = 10
         elif dataset == 'cifar100':
@@ -179,7 +187,11 @@ def get_network_and_input_spec(network_file, batch_size, X, y, dataset, eps, tra
     #FEAT: images follow the run dtype (fp64 under --dtype float64).
     X = X.to(torch.get_default_dtype())
 
-    spec_weight, spec_bias = ImageDataset.get_output_spec_weight_and_bias(X, y, dataset)
+    #FEAT: a VNN-LIB batch is parsed here, inside the timed run; X becomes the specs' box.
+    if vnnlib_path(dataset):
+        X, spec_weight, spec_bias = read_vnnlib_batch(vnnlib_path(dataset), y, X)
+    else:
+        spec_weight, spec_bias = ImageDataset.get_output_spec_weight_and_bias(X, y, dataset)
     network = get_net(network_file, spec_weight, spec_bias, no_sparsity)
     l = ImageDataset.create_l(X, network.size, batch_size, eps, dataset, no_sparsity)
     u = ImageDataset.create_u(X, network.size, batch_size, eps, dataset, no_sparsity)
